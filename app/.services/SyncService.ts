@@ -2,11 +2,13 @@ import database from '../.db/index'
 import { ClientService } from './ClientService'
 import { ConsumptionService } from './ConsumptionService'
 import { ProductService } from './ProductService'
+import { PaymentService } from './PaymentService'
 
 export interface SyncData {
   products: any[]
   clients: any[]
   consumptions: any[]
+  payments: any[]
   timestamp: number
   deviceId: string
 }
@@ -20,34 +22,58 @@ export const SyncService = {
         ConsumptionService.getAll(),
       ])
 
+      // Get all payments from mock or database
+      const allPayments = (await PaymentService.getByClient('')) || []
+
       return {
         products: products.map((p) => ({
           id: p.id,
           name: p.name,
-          cost_price: p.costPrice,
-          sale_price: p.salePrice,
-          profit_percent: p.profitPercent,
-          created_at: p.createdAt,
-          updated_at: p.updatedAt,
+          costPrice: p.costPrice || p.cost_price,
+          salePrice: p.salePrice || p.sale_price,
+          profitPercent: p.profitPercent || p.profit_percent,
+          quantity: p.quantity,
+          initialQuantity: p.initialQuantity || p.initial_quantity,
+          createdAt: p.createdAt || p.created_at,
+          updatedAt: p.updatedAt || p.updated_at,
         })),
         clients: clients.map((c) => ({
           id: c.id,
           name: c.name,
           phone: c.phone,
           notes: c.notes,
-          created_at: c.createdAt,
-          updated_at: c.updatedAt,
+          createdAt: c.createdAt || c.created_at,
+          updatedAt: c.updatedAt || c.updated_at,
         })),
         consumptions: consumptions.map((c) => ({
           id: c.id,
-          client_id: c.clientId,
-          product_id: c.productId,
+          clientId: c.clientId || c.client_id,
+          productId: c.productId || c.product_id,
           quantity: c.quantity,
           price: c.price,
           timestamp: c.timestamp,
-          device_origin: c.deviceOrigin,
-          created_at: c.createdAt,
-          updated_at: c.updatedAt,
+          deviceOrigin: c.deviceOrigin || c.device_origin,
+          createdAt: c.createdAt || c.created_at,
+          updatedAt: c.updatedAt || c.updated_at,
+        })),
+        payments: allPayments.map((p: any) => ({
+          id: p.id,
+          clientId: p.clientId || p.client_id,
+          month: p.month,
+          year: p.year,
+          isPaid: p.isPaid || p.is_paid,
+          paidAt: p.paidAt || p.paid_at,
+          createdAt: p.createdAt || p.created_at,
+          updatedAt: p.updatedAt || p.updated_at,
+        })),
+        timestamp: Date.now(),
+        deviceId: 'device_' + Date.now(),
+      }
+    } catch (error) {
+      console.error('Erro ao exportar dados:', error)
+      throw error
+    }
+  },
         })),
         timestamp: Date.now(),
         deviceId: 'device_' + Date.now(), // Pode ser melhorado com deviceInfo

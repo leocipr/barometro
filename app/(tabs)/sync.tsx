@@ -5,7 +5,6 @@ import {
     Alert,
     ScrollView,
     StyleSheet,
-    Switch,
     Text,
     TextInput,
     TouchableOpacity,
@@ -14,93 +13,106 @@ import {
 import { ThemedText } from '../../components/themed-text'
 import { ThemedView } from '../../components/themed-view'
 import { DiscoveredDevice, NetworkDiscoveryService } from '../.services/NetworkDiscoveryService'
-import { SyncService } from '../.services/SyncService'
+import { SyncClientService, SyncStatus } from '../.services/SyncClientService'
 
 export default function SyncScreen() {
   const router = useRouter()
   const [devices, setDevices] = useState<DiscoveredDevice[]>([])
-  const [ipAddress, setIpAddress] = useState('')
-  const [port, setPort] = useState('3000')
-  const [autoSync, setAutoSync] = useState(false)
+  const [discovering, setDiscovering] = useState(false)
   const [syncing, setSyncing] = useState(false)
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
-  const [syncStatus, setSyncStatus] = useState('')
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>({
+    status: 'idle',
+    message: 'Pronto para sincronizar',
+  })
+  const [manualIp, setManualIp] = useState('')
 
   useEffect(() => {
-    // Atualizar lista de dispositivos
     const unsubscribe = NetworkDiscoveryService.subscribe(setDevices)
     return unsubscribe
   }, [])
 
-  const handleAddDevice = () => {
-    if (!ipAddress) {
-      Alert.alert('Erro', 'Digite um endereço IP')
+  const handleDiscoverDevices = async () => {
+    try {
+      setDiscovering(true)
+      setSyncStatus({ status: 'syncing', message: 'Procurando dispositivos...' })
+
+      const discoveredDevices = await NetworkDiscoveryService.discoverDevices(8000)
+      setDevices(discoveredDevices)
+
+      if (discoveredDevices.length === 0) {
+        setSyncStatus({ status: 'idle', message: 'Nenhum dispositivo encontrado' })
+      } else {
+        setSyncStatus({
+          status: 'success',
+          message: `${discoveredDevices.length} dispositivo(s) encontrado(s)`,
+        })
+      }
+    } catch (error) {
+      setSyncStatus({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Erro na descoberta',
+      })
+    } finally {
+      setDiscovering(false)
+    }
+  }
+
+  const handleAddManualDevice = () => {
+    if (!manualIp) {
+      Alert.alert('Erro', 'Digite um endereço IP ou URL')
       return
     }
 
-    const device = NetworkDiscoveryService.addDevice(ipAddress, parseInt(port))
+    const device = NetworkDiscoveryService.addDevice(manualIp, 3000)
     Alert.alert('Sucesso', `Dispositivo adicionado: ${device.name}`)
-    setIpAddress('')
-    setPort('3000')
+    setManualIp('')
   }
 
-  const handleSyncWithDevice = async (device: DiscoveredDevice) => {
+  const handleSyncDevice = async (device: DiscoveredDevice) => {
     try {
       setSyncing(true)
-      setSyncStatus(`Sincronizando com ${device.ipAddress}...`)
+      const serverUrl = `${device.ipAddress}:${device.port}`
 
-      // Testar conexão
-      const connected = await NetworkDiscoveryService.testConnection(device)
-      if (!connected) {
-        Alert.alert(
-          'Erro',
-          'Não foi possível conectar ao dispositivo. Verifique se está online.'
-        )
-        return
+      const result = await SyncClientService.bidirectionalSync(serverUrl)
+      setSyncStatus(result)
+
+      if (result.status === 'success') {
+        Alert.alert('Sucesso', 'Sincronização concluída com sucesso!')
+      } else if (result.status === 'error') {
+        Alert.alert('Erro', result.message)
       }
-
-      // Buscar dados do dispositivo remoto
-      const response = await fetch(
-        `http://${device.ipAddress}:${device.port}/api/sync/export`,
-        { timeout: 10000 }
-      )
-
-      if (!response.ok) {
-        throw new Error(`Erro na resposta: ${response.status}`)
-      }
-
-      const remoteData = await response.json()
-
-      // Importar dados localmente
-      await SyncService.importData(remoteData)
-
-      setLastSyncTime(new Date())
-      setSyncStatus(
-        `Última sincronização: ${new Date().toLocaleTimeString('pt-BR')}`
-      )
-      Alert.alert(
-        'Sucesso',
-        `Dados sincronizados com ${device.ipAddress}\n\n` +
-          `Produtos: ${remoteData.products.length}\n` +
-          `Clientes: ${remoteData.clients.length}\n` +
-          `Consumos: ${remoteData.consumptions.length}`
-      )
     } catch (error) {
-      Alert.alert('Erro', `Erro ao sincronizar: ${error}`)
-      console.error('Erro ao sincronizar:', error)
+      const message = error instanceof Error ? error.message : 'Erro ao sincronizar'
+      setSyncStatus({ status: 'error', message })
+      Alert.alert('Erro', message)
     } finally {
       setSyncing(false)
-      setSyncStatus('')
     }
   }
 
-  const handleAutoSyncToggle = async (value: boolean) => {
-    setAutoSync(value)
-    if (value && devices.length > 0) {
-      Alert.alert(
-        'Info',
-        'Auto-sincronização ativada. Será feita a cada 5 minutos com o primeiro dispositivo disponível.'
-      )
+  const handleTestConnection = async (device: DiscoveredDevice) => {
+    try {
+      const connected = await NetworkDiscoveryService.testConnection(device)
+      if (connected) {
+        Alert.alert('Sucesso', `Conexão OK com ${device.ipAddress}`)
+      } else {
+        Alert.alert('Erro', `Não conseguiu conectar em ${device.ipAddress}`)
+      }
+    } catch (error) {
+      Alert.alert('Erro', 'Erro ao testar conexão')
+    }
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'success':
+        return '#28a745'
+      case 'error':
+        return '#dc3545'
+      case 'syncing':
+        return '#007bff'
+      default:
+        return '#999'
     }
   }
 
@@ -111,112 +123,114 @@ export default function SyncScreen() {
           <ThemedText style={styles.backButtonText}>← Voltar</ThemedText>
         </TouchableOpacity>
       </View>
+
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <ThemedText style={styles.title}>Sincronizar Dados</ThemedText>
-
-        {/* Info sobre sincronização */}
-        <View style={styles.infoContainer}>
-          <ThemedText style={styles.infoTitle}>ℹ️ Sincronização Local</ThemedText>
-          <ThemedText style={styles.infoText}>
-            Este aplicativo sincroniza dados entre dispositivos conectados na mesma rede WiFi.
-            {'\n\n'}
-            Digite o IP do outro dispositivo para sincronizar:
-          </ThemedText>
-        </View>
-
-        {/* Adicionar dispositivo */}
-        <View style={styles.formContainer}>
-          <ThemedText style={styles.formTitle}>Adicionar Dispositivo</ThemedText>
-          <TextInput
-            style={styles.input}
-            placeholder="Endereço IP (ex: 192.168.1.100)"
-            placeholderTextColor="#999"
-            value={ipAddress}
-            onChangeText={setIpAddress}
-            keyboardType="decimal-pad"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Porta (padrão: 3000)"
-            placeholderTextColor="#999"
-            value={port}
-            onChangeText={setPort}
-            keyboardType="decimal-pad"
-          />
-          <TouchableOpacity
-            style={[styles.button, syncing && styles.buttonDisabled]}
-            onPress={handleAddDevice}
-            disabled={syncing}
-          >
-            <Text style={styles.buttonText}>Adicionar Dispositivo</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Auto-sincronização */}
-        <View style={styles.autoSyncContainer}>
-          <ThemedText style={styles.autoSyncLabel}>Auto-sincronização</ThemedText>
-          <Switch
-            value={autoSync}
-            onValueChange={handleAutoSyncToggle}
-            disabled={devices.length === 0}
-          />
-        </View>
+        <ThemedText style={styles.title}>WiFi Sync</ThemedText>
 
         {/* Status */}
-        {lastSyncTime && (
-          <View style={styles.statusContainer}>
-            <ThemedText style={styles.statusText}>
-              ✓ Última sincronização: {lastSyncTime.toLocaleTimeString('pt-BR')}
+        <View style={styles.statusContainer}>
+          <View
+            style={[
+              styles.statusIndicator,
+              { backgroundColor: getStatusColor(syncStatus.status) },
+            ]}
+          />
+          <ThemedText style={styles.statusText}>{syncStatus.message}</ThemedText>
+          {syncStatus.lastSync && (
+            <ThemedText style={styles.lastSyncText}>
+              Última: {new Date(syncStatus.lastSync).toLocaleTimeString('pt-BR')}
             </ThemedText>
-          </View>
-        )}
-
-        {syncStatus && (
-          <View style={styles.syncingContainer}>
-            <ActivityIndicator size="small" color="#0000ff" />
-            <ThemedText style={styles.syncingText}>{syncStatus}</ThemedText>
-          </View>
-        )}
-
-        {/* Lista de dispositivos */}
-        <View style={styles.devicesContainer}>
-          <ThemedText style={styles.formTitle}>
-            Dispositivos Encontrados ({devices.length})
-          </ThemedText>
-          {devices.length === 0 ? (
-            <ThemedText style={styles.emptyText}>
-              Nenhum dispositivo adicionado. Digite o IP acima para sincronizar.
-            </ThemedText>
-          ) : (
-            devices.map((device) => (
-              <View key={device.id} style={styles.deviceCard}>
-                <View style={styles.deviceInfo}>
-                  <ThemedText style={styles.deviceName}>{device.name}</ThemedText>
-                  <ThemedText style={styles.deviceAddress}>
-                    {device.ipAddress}:{device.port}
-                  </ThemedText>
-                </View>
-                <TouchableOpacity
-                  style={[styles.syncButton, syncing && styles.buttonDisabled]}
-                  onPress={() => handleSyncWithDevice(device)}
-                  disabled={syncing}
-                >
-                  <Text style={styles.syncButtonText}>
-                    {syncing ? 'Sincr.' : 'Sincr.'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ))
           )}
         </View>
 
-        {/* Nota sobre servidor */}
-        <View style={styles.noteContainer}>
-          <ThemedText style={styles.noteTitle}>📝 Nota Importante</ThemedText>
-          <ThemedText style={styles.noteText}>
-            Para que a sincronização funcione, os dois dispositivos devem estar conectados na mesma rede WiFi e ambos com o aplicativo aberto.
+        {/* Descoberta de Dispositivos */}
+        <View style={styles.section}>
+          <ThemedText style={styles.sectionTitle}>🔍 Descobrir Dispositivos</ThemedText>
+          <TouchableOpacity
+            style={[styles.button, discovering && styles.buttonDisabled]}
+            onPress={handleDiscoverDevices}
+            disabled={discovering || syncing}
+          >
+            {discovering ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Text style={styles.buttonText}>Procurar na Rede</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Adicionar Manualmente */}
+        <View style={styles.section}>
+          <ThemedText style={styles.sectionTitle}>📱 Adicionar Manualmente</ThemedText>
+          <TextInput
+            style={styles.input}
+            placeholder="IP do servidor (ex: 192.168.1.100)"
+            placeholderTextColor="#999"
+            value={manualIp}
+            onChangeText={setManualIp}
+          />
+          <TouchableOpacity
+            style={[styles.button, styles.buttonSecondary, syncing && styles.buttonDisabled]}
+            onPress={handleAddManualDevice}
+            disabled={syncing}
+          >
+            <Text style={styles.buttonSecondaryText}>Adicionar</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Lista de Dispositivos */}
+        {devices.length > 0 && (
+          <View style={styles.section}>
+            <ThemedText style={styles.sectionTitle}>🖥️ Dispositivos Disponíveis</ThemedText>
+            {devices.map((device) => (
+              <View key={device.id} style={styles.deviceCard}>
+                <View style={styles.deviceInfo}>
+                  <ThemedText style={styles.deviceName}>{device.name}</ThemedText>
+                  <ThemedText style={styles.deviceIp}>
+                    {device.ipAddress}:{device.port}
+                  </ThemedText>
+                </View>
+                <View style={styles.deviceActions}>
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.actionTest]}
+                    onPress={() => handleTestConnection(device)}
+                    disabled={syncing}
+                  >
+                    <Text style={styles.actionButtonText}>Testar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.actionButton,
+                      styles.actionSync,
+                      syncing && styles.buttonDisabled,
+                    ]}
+                    onPress={() => handleSyncDevice(device)}
+                    disabled={syncing}
+                  >
+                    {syncing ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.actionButtonText}>Sincronizar</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Informações */}
+        <View style={styles.section}>
+          <ThemedText style={styles.sectionTitle}>ℹ️ Instruções</ThemedText>
+          <ThemedText style={styles.instructionText}>
+            1. Inicie o servidor de sincronização:{'\n'}
+            <Text style={styles.codeText}>npm run sync-server</Text>
             {'\n\n'}
-            A sincronização é unidirecional (puxando dados do outro dispositivo). Recomenda-se fazer a sincronização regularmente para manter os dados atualizados.
+            2. Clique em "Procurar na Rede" para descobrir dispositivos{'\n'}
+            {'\n'}
+            3. Ou adicione manualmente o IP do servidor{'\n'}
+            {'\n'}
+            4. Clique em "Sincronizar" para fazer upload/download dos dados
           </ThemedText>
         </View>
       </ScrollView>
@@ -246,6 +260,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingVertical: 20,
+    paddingBottom: 40,
   },
   title: {
     fontSize: 28,
@@ -253,33 +268,35 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center',
   },
-  infoContainer: {
-    backgroundColor: '#e3f2fd',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#2196F3',
-  },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#1976D2',
-  },
-  infoText: {
-    fontSize: 14,
-    color: '#1565C0',
-    lineHeight: 20,
-  },
-  formContainer: {
+  statusContainer: {
     backgroundColor: 'rgba(0, 0, 0, 0.05)',
     padding: 15,
     borderRadius: 8,
     marginBottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  formTitle: {
-    fontSize: 18,
+  statusIndicator: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 10,
+  },
+  statusText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  lastSyncText: {
+    fontSize: 12,
+    color: '#999',
+    marginRight: 10,
+  },
+  section: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    fontSize: 16,
     fontWeight: '600',
     marginBottom: 12,
   },
@@ -290,7 +307,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 10,
-    fontSize: 16,
+    fontSize: 14,
     color: '#333',
   },
   button: {
@@ -298,64 +315,23 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 6,
     alignItems: 'center',
-    marginTop: 10,
+    justifyContent: 'center',
+  },
+  buttonSecondary: {
+    backgroundColor: '#666',
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   buttonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
   },
-  autoSyncContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.05)',
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 20,
-  },
-  autoSyncLabel: {
-    fontSize: 16,
+  buttonSecondaryText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '600',
-  },
-  statusContainer: {
-    backgroundColor: '#e8f5e9',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
-  },
-  statusText: {
-    fontSize: 14,
-    color: '#2E7D32',
-  },
-  syncingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff3e0',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9800',
-  },
-  syncingText: {
-    fontSize: 14,
-    color: '#E65100',
-    marginLeft: 10,
-  },
-  devicesContainer: {
-    marginBottom: 20,
-  },
-  emptyText: {
-    textAlign: 'center',
-    fontSize: 14,
-    color: '#999',
-    marginVertical: 15,
   },
   deviceCard: {
     backgroundColor: 'rgba(0, 0, 0, 0.05)',
@@ -370,42 +346,47 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   deviceName: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     marginBottom: 4,
   },
-  deviceAddress: {
-    fontSize: 14,
+  deviceIp: {
+    fontSize: 12,
     color: '#666',
   },
-  syncButton: {
-    backgroundColor: '#25D366',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 6,
+  deviceActions: {
+    flexDirection: 'row',
+    gap: 8,
   },
-  syncButtonText: {
+  actionButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 70,
+  },
+  actionTest: {
+    backgroundColor: '#6c757d',
+  },
+  actionSync: {
+    backgroundColor: '#28a745',
+  },
+  actionButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
   },
-  noteContainer: {
-    backgroundColor: '#fff3e0',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9800',
-  },
-  noteTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#E65100',
-  },
-  noteText: {
-    fontSize: 14,
-    color: '#BF360C',
+  instructionText: {
+    fontSize: 13,
+    color: '#666',
     lineHeight: 20,
+  },
+  codeText: {
+    fontFamily: 'monospace',
+    backgroundColor: '#f5f5f5',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 3,
   },
 })

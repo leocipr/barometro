@@ -1,7 +1,7 @@
 import database from '../.db/index'
 import Consumption from '../.db/models/Consumption'
-import { ProductService } from './ProductService'
 import { PaymentService } from './PaymentService'
+import { ProductService } from './ProductService'
 
 // In-memory fallback when database is not available
 let mockConsumptions: any[] = []
