@@ -1,11 +1,11 @@
 import database from '../.db/index'
 import Consumption from '../.db/models/Consumption'
 import { ProductService } from './ProductService'
+import { PaymentService } from './PaymentService'
 
 // In-memory fallback when database is not available
 let mockConsumptions: any[] = []
 let mockIdCounter = 1
-let paymentStatus: { [key: string]: boolean } = {} // clientId_month_year -> isPaid
 
 const createMockConsumption = (
   clientId: string,
@@ -188,12 +188,12 @@ export const ConsumptionService = {
 
       if (monthConsumptions.length > 0) {
         const total = monthConsumptions.reduce((sum, c) => sum + c.quantity * (c.price || 0), 0)
-        const key = `${clientId}_${month}_${year}`
+        const isPaid = await PaymentService.getPaymentStatus(clientId, month, year)
         invoices.push({
           month,
           year,
           total,
-          isPaid: paymentStatus[key] || false,
+          isPaid,
         })
       }
     }
@@ -202,13 +202,10 @@ export const ConsumptionService = {
   },
 
   async togglePaymentStatus(clientId: string, month: number, year: number): Promise<boolean> {
-    const key = `${clientId}_${month}_${year}`
-    paymentStatus[key] = !paymentStatus[key]
-    return paymentStatus[key]
+    return await PaymentService.togglePaymentStatus(clientId, month, year)
   },
 
   async getPaymentStatus(clientId: string, month: number, year: number): Promise<boolean> {
-    const key = `${clientId}_${month}_${year}`
-    return paymentStatus[key] || false
+    return await PaymentService.getPaymentStatus(clientId, month, year)
   },
 }
